@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import torch
 import torchvision.utils as vutils
 
-from DCGAN.models.mnist_model import Generator, Discriminator
-from DCGAN.models.DCGAN import DCGAN
+from BEGAN.models.mnist_model import Generator, Discriminator
+from BEGAN.models.BEGAN import BEGAN
 from initialization import weights_init
 from dataloader import get_data
 
@@ -27,21 +27,25 @@ if not os.path.isdir('result/mnist/checkpoint'):
 # Root directory for dataset
 dataset = "MNIST"
 # Batch size during training
-batch_size = 128
+batch_size = 64
 # Spatial size of training images.
 image_size = 32
 # Number of channels in the training images.
 nc = 1
 # Size of z latent vector (i.e. size of generator input)
-nz = 100
+nz = 64
 # Number of training epochs
 epochs = 100
 save_epoch = 10
 # Learning rate for optimizers
 lr = 0.0002
-# Hyper-parameters for Adam optimizers
+# Hyper-parameters of Adam optimizers
 beta1 = 0.5
 beta2 = 0.999
+# Hyper-parameters of BEGAN objective
+gamma = 0.75
+lambda_k = 0.001
+k = 0.0
 
 # Decide which device we want to run on
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -61,8 +65,9 @@ plt.imshow(np.transpose(
 plt.show()
 plt.close(fig)
 
-model = DCGAN(Generator, Discriminator, weights_init, epochs, batch_size, nc,
-              image_size, save_epoch, nz, lr, beta1, beta2, 1, 0, device)
+model = BEGAN(Generator, Discriminator, weights_init, epochs, batch_size,
+              image_size, save_epoch, nz, lr, beta1, beta2, gamma, lambda_k, k,
+              device)
 
 print("Starting Training Loop...")
 model.train(dataloader, 'result/mnist')

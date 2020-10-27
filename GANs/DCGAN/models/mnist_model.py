@@ -1,4 +1,3 @@
-
 import torch.nn as nn
 
 
@@ -63,7 +62,3 @@ class Discriminator(nn.Module):
 
     def forward(self, inputs):
         return self.main(inputs)
-
-
-
-
