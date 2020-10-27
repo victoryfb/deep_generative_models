@@ -5,16 +5,18 @@ from torchvision import utils
 from utils.save import save_loss, save_fake_images
 
 
-class BEGAN:
+class EBGAN:
     def __init__(self, Generator, Discriminator, weights_init, epochs,
                  batch_size, img_size, save_epoch, dim_z, lr, beta1,
-                 beta2=0.999, gamma=0.75, lambda_k=0.001, k=.0, device='cpu'):
+                 beta2=0.999, lambda_pt=0.1, margin=1, device='cpu'):
         self.device = device
 
         self.G = Generator().to(device)
         self.D = Discriminator().to(device)
         self.G.apply(weights_init)
         self.D.apply(weights_init)
+
+        self.criterion = nn.MSELoss()
 
         self.d_optimizer = torch.optim.Adam(self.D.parameters(), lr=lr,
                                             betas=(beta1, beta2))
@@ -26,9 +28,8 @@ class BEGAN:
         self.img_size = img_size
         self.save_epoch = save_epoch
         self.dim_z = dim_z
-        self.gamma = gamma
-        self.lambda_k = lambda_k
-        self.k = k
+        self.lambda_pt = lambda_pt
+        self.margin = margin
 
     def train(self, train_loader, result_root='result/mnist'):
         data_size = len(train_loader)
@@ -47,9 +48,9 @@ class BEGAN:
                 # Format batch
                 real_images = images.to(self.device)
                 # Forward pass real batch through D
-                d_real = self.D(real_images)
+                d_real, _ = self.D(real_images)
                 # Calculate loss on all-real batch
-                d_loss_real = torch.mean(torch.abs(d_real - real_images))
+                d_loss_real = self.criterion(d_real, real_images)
 
                 # Train with all-fake batch
                 # Generate batch of latent vectors
@@ -57,13 +58,14 @@ class BEGAN:
                 # Generate fake image batch with G
                 fake_images = self.G(z)
                 # Classify all fake batch with D
-                d_fake = self.D(fake_images.detach())
+                d_fake, embeddings = self.D(fake_images.detach())
                 # Calculate D's loss on the all-fake batch
-                d_loss_fake = torch.mean(
-                    torch.abs(d_fake - fake_images.detach()))
+                d_loss_fake = self.criterion(d_fake, fake_images.detach())
                 # Calculate the gradients for this batch
                 self.D.zero_grad()
-                d_loss = d_loss_real - self.k * d_loss_fake
+                d_loss = d_loss_real
+                if self.margin - d_loss_fake.item() > 0:
+                    d_loss += self.margin - d_loss_fake
                 d_loss.backward()
                 # Update D
                 self.d_optimizer.step()
@@ -73,24 +75,15 @@ class BEGAN:
                 ###########################
                 # Since we just updated D, perform another forward pass of
                 # all-fake batch through D.
-                d_fake = self.D(fake_images)
+                d_fake, embeddings = self.D(fake_images)
                 # Calculate G's loss based on this output
-                g_loss = torch.mean(torch.abs(d_fake - fake_images))
+                g_loss = self.criterion(d_fake, fake_images) \
+                         + self.lambda_pt * self.pullaway_loss(embeddings)
                 # Calculate gradients for G
                 self.G.zero_grad()
                 g_loss.backward()
                 # Update G
                 self.g_optimizer.step()
-
-                ############################
-                # (3) Update k
-                ###########################
-                diff = torch.mean(self.gamma * d_loss_real - d_loss_fake)
-                self.k = self.k + self.lambda_k * diff.item()
-                self.k = min(max(self.k, 0), 1)
-
-                # Update convergence metric
-                convergence_metric = (d_loss_real + torch.abs(diff)).item()
 
                 d_losses.append(d_loss.item())
                 g_losses.append(g_loss.item())
@@ -98,8 +91,7 @@ class BEGAN:
                 # Output training states
                 if i % 50 == 0:
                     self._show_training_state(epoch, i, data_size,
-                                              d_loss, g_loss,
-                                              convergence_metric)
+                                              d_loss, g_loss)
 
                 # Save the trained parameters
                 if (epoch + 1) % self.save_epoch == 0:
@@ -117,11 +109,21 @@ class BEGAN:
         # Save the losses
         save_loss(d_losses, g_losses, result_root)
 
+    @staticmethod
+    def pullaway_loss(embeddings):
+        norm = torch.sqrt(torch.sum(embeddings ** 2, -1, keepdim=True))
+        normalized_emb = embeddings / norm
+        similarity = torch.matmul(normalized_emb,
+                                  normalized_emb.transpose(1, 0))
+        batch_size = embeddings.size(0)
+        loss_pt = (torch.sum(similarity) - batch_size) / (
+                batch_size * (batch_size - 1))
+        return loss_pt
+
     def _show_training_state(self, epoch, iteration, data_size, d_loss,
-                             g_loss, convergence_metric):
+                             g_loss):
         print(f'[{epoch}/{self.epochs}][{iteration}/{data_size}]\t\
-              Loss_D: {d_loss:.4f}\tLoss_G: {g_loss:.4f}\t\
-              Convergence: {convergence_metric:.4f}')
+              Loss_D: {d_loss:.4f}\tLoss_G: {g_loss:.4f}')
 
     def save_model(self, epoch, path):
         torch.save(self.G.state_dict(),
